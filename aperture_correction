@@ -1,0 +1,138 @@
+import matplotlib.pyplot as plt
+
+from astropy.io import fits
+from astropy.stats import SigmaClip
+from astropy.visualization import simple_norm
+from astropy.visualization.mpl_normalize import ImageNormalize
+from astropy.visualization import SqrtStretch
+norm = ImageNormalize(stretch=SqrtStretch())
+
+from photutils.aperture import ApertureStats
+from photutils.aperture import CircularAperture, CircularAnnulus
+from photutils.aperture import aperture_photometry
+from photutils.centroids import centroid_sources
+from photutils.centroids import centroid_com
+
+import pandas as pd
+import numpy as np
+
+path = '/media/amina/50A693D8A693BCC2/NGC2403/hst/814/814_2019.fits'
+hdulist = fits.open(path)
+data = hdulist[1].data
+hdr = hdulist[0].header
+filt = hdr['FILTER2']
+
+fig = plt.figure(figsize=(5, 5))
+plt.title(str(filt))
+plt.imshow(data, norm=norm, origin='lower', cmap='binary', interpolation='nearest')
+plt.colorbar(orientation='vertical', location='right', fraction=0.046, pad=0.04)
+
+# АПЕРТУРНАЯ ПОПРАВКА
+p = '/media/amina/50A693D8A693BCC2/NGC2403/hst/814/aper_corr_814'
+lst = pd.read_csv(p, decimal=',', header=None)
+
+# вычисление центроидов
+x_init = lst.iloc[:,0].astype('float64')
+y_init = lst.iloc[:,1].astype('float64')
+x, y = centroid_sources(data, x_init, y_init, box_size=5,
+                        centroid_func=centroid_com)
+
+# создание пар центроидов
+pairs = np.transpose([x,y])
+print(pairs)
+
+# строим апертуры для объекта, апертурных звёзд и локального фона вокруг них
+
+aperture = CircularAperture(pairs, r=4)
+annulus_aperture = CircularAnnulus(pairs, r_in=4, r_out=9)
+
+norm = simple_norm(data, 'sqrt', percent=99)
+fig = plt.figure(figsize=(5, 5))
+plt.imshow(data, norm=norm, interpolation='nearest')
+plt.colorbar(orientation='vertical', fraction=0.046, pad=0.04)#)
+plt.xlim(pairs[0][0]-50, pairs[0][0]+50)
+plt.ylim(pairs[0][1]-50, pairs[0][1]+50)
+
+ap_patches = aperture.plot(color='white', lw=2,
+                           label='Photometry aperture')
+ann_patches = annulus_aperture.plot(color='red', lw=2,
+                                    label='Background annulus')
+handles = (ap_patches[0], ann_patches[0])
+plt.legend(loc=(0.01, 0.01), facecolor='#458989', labelcolor='white',
+           handles=handles, prop={'weight': 'bold', 'size': 11})
+
+# рассчитываем величину потока в COUNTS для апертурных звёзд внутри круговой апертуры
+
+phot_table = aperture_photometry(data, aperture)
+for col in phot_table.colnames:
+    phot_table[col].info.format = '%.8g'  # for consistent table output
+print(phot_table)
+
+# учёт локального фона для апертурных звёзд
+
+# класс ApertureStats для вычисления среднего уровня фона
+# в кольцевой апертуре в каждой позиции
+sigclip = SigmaClip(sigma=3., maxiters=3)
+aperstats_small = ApertureStats(data, annulus_aperture, sigma_clip=sigclip)
+bkg_small = aperstats_small.median
+# print(bkg_small)
+
+aperture_small = aperture.area # площадь апертуры
+total_bkg = bkg_small * aperture_small
+
+phot_bkgsub_3 = phot_table['aperture_sum'] - total_bkg
+phot_table['total_bkg'] = total_bkg
+phot_table['aperture_sum_bkфgsub'] = phot_bkgsub_3
+for col in phot_table.colnames:
+    phot_table[col].info.format = '%.8g'  # for consistent table output
+print(phot_table)
+
+# строим апертуры для локального фона и апертурных звёзд
+aperture = CircularAperture(pairs, r=10)
+annulus_aperture = CircularAnnulus(pairs, r_in=10, r_out=15)
+
+norm = simple_norm(data, 'sqrt', percent=99)
+fig = plt.figure(figsize=(4, 4))
+plt.imshow(data, norm=norm, interpolation='nearest')
+plt.colorbar(orientation='vertical', fraction=0.046, pad=0.04)
+plt.xlim(pairs[0][0]-50, pairs[0][0]+50)
+plt.ylim(pairs[0][1]-50, pairs[0][1]+50)
+
+ap_patches = aperture.plot(color='white', lw=1,
+                           label='Photometry aperture')
+ann_patches = annulus_aperture.plot(color='red', lw=1,
+                                    label='Background annulus')
+handles = (ap_patches[0], ann_patches[0])
+plt.legend(loc='best', facecolor='#458989', labelcolor='white',
+           handles=handles, prop={'weight': 'bold', 'size': 11})
+
+# рассчитываем величину потока в COUNTS для апертурных звёзд внутри круговой апертуры
+phot_table = aperture_photometry(data, aperture)
+for col in phot_table.colnames:
+    phot_table[col].info.format = '%.8g'  # for consistent table output
+# print(phot_table)
+
+# вычисляем локальный фон для апертурных звёзд
+sigclip = SigmaClip(sigma=3., maxiters=3)
+aperstats = ApertureStats(data, annulus_aperture, sigma_clip=sigclip)
+bkg_mean = aperstats.median
+# print(bkg_mean)
+aperture_area = aperture.area
+total_bkg = bkg_mean * aperture_area
+# print(total_bkg)
+
+# учёт локального фона для апертурных звёзд
+total_bkg = bkg_mean * aperture_area
+phot_bkgsub_10 = phot_table['aperture_sum'] - total_bkg
+phot_table['total_bkg'] = total_bkg
+phot_table['aperture_sum_bkgsub'] = phot_bkgsub_10
+for col in phot_table.colnames:
+    phot_table[col].info.format = '%.8g'  # for consistent table output
+print(phot_table)
+
+# вычислечение аперутрной поправки
+
+ap_corr = 2.5 * np.log10(phot_bkgsub_3 / phot_bkgsub_10)
+print(ap_corr)
+
+print(np.median(ap_corr))
